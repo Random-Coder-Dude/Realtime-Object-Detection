@@ -13,7 +13,7 @@ PYTHON=py
 # Paths
 ANNOTATION_SCRIPT=annotate.py
 TRAINING_SCRIPT=train.py
-TEST_SCRIPT=real_time_test.py
+TEST_SCRIPT=test.py
 
 # Commands
 .PHONY: all train convert compile transfer deploy clean
