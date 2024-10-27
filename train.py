@@ -1,135 +1,93 @@
-import cv2
-import numpy as np
-import os
-import glob
 import tensorflow as tf
-from tensorflow.keras import layers, models
+import numpy as np
+import cv2
+import os
+import json
 
-# Set parameters
-IMAGE_SIZE = (128, 128)  # Resize images for training
-DATA_DIR = 'data'
-BATCH_SIZE = 16
+# Parameters
+IMAGE_SIZE = (128, 128)
+BATCH_SIZE = 32
 EPOCHS = 10
-images = []
-bboxes = []
-drawing = False  # True when mouse is pressed
-start_point = None  # Starting point for bounding box
-end_point = None  # Ending point for bounding box
+MODEL_SAVE_PATH = 'object_detection_model.tf'
+IMAGE_FOLDER = 'data/images'
+ANNOTATION_FILE = 'data/annotations.json'
 
-# Create a directory called 'data' if it doesn't exist
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
-
-# Function to capture frames from the camera and annotate
-def capture_and_annotate():
-    global images, bboxes, drawing, start_point, end_point
-    drawing = False  # True when mouse is pressed
-    start_point = None  # Starting point for bounding box
-    end_point = None  # Ending point for bounding box
-
-    cap = cv2.VideoCapture(0)  # Use 0 for the default camera
-
-    def draw_rectangle(event, x, y, flags, param):
-        global start_point, drawing, end_point
-        if event == cv2.EVENT_LBUTTONDOWN:
-            drawing = True
-            start_point = (x, y)
-        elif event == cv2.EVENT_MOUSEMOVE:
-            if drawing:
-                end_point = (x, y)  # Update the end point for live rectangle drawing
-        elif event == cv2.EVENT_LBUTTONUP:
-            drawing = False
-            end_point = (x, y)  # Finalize the end point
-            # Save the bounding box coordinates
-            bboxes.append([start_point[0], start_point[1], end_point[0], end_point[1]])
-            cv2.rectangle(frame, start_point, end_point, (255, 0, 0), 2)  # Draw rectangle permanently
-            cv2.imshow("Frame", frame)
-
-    cv2.namedWindow("Frame")
-    cv2.setMouseCallback("Frame", draw_rectangle)
-
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # If drawing, keep the rectangle on the screen
-        if drawing and start_point is not None and end_point is not None:
-            img_copy = frame.copy()  # Make a copy of the current frame
-            cv2.rectangle(img_copy, start_point, end_point, (255, 0, 0), 2)  # Draw the rectangle on the copy
-            cv2.imshow("Frame", img_copy)  # Show the copy with the rectangle
-        else:
-            cv2.imshow("Frame", frame)  # Show the original frame
-
-        # Capture the image when 'c' is pressed
-        if cv2.waitKey(1) & 0xFF == ord('c'):
-            # Save the current frame as an image file in the 'data' folder
-            img_resized = cv2.resize(frame, IMAGE_SIZE)
-            images.append(img_resized)
-            print("Image captured and annotated!")
-            
-            # Save the current frame as an image file in the 'data' folder
-            filename = f"{DATA_DIR}/captured_image_{len(images)}.png"
-            cv2.imwrite(filename, frame)  # Save the frame with bounding box
-            print(f"Saved frame as '{filename}'")
-            
-            # Save bounding box coordinates to a corresponding text file
-            bbox_filename = f"{DATA_DIR}/captured_image_{len(images)}.txt"
-            with open(bbox_filename, 'w') as f:
-                f.write(','.join(map(str, bboxes[-1])))  # Save the last drawn bounding box
-
-        # Stop capturing when 'q' is pressed
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
-
-    cap.release()
-    cv2.destroyAllWindows()
-
-# Load data for training
+# Load data from annotations JSON
 def load_data():
+    with open(ANNOTATION_FILE, 'r') as file:
+        annotations = json.load(file)
+
     images = []
     bboxes = []
-    for img_path in glob.glob(os.path.join(DATA_DIR, '*.png')):
-        # Load image
-        image = tf.keras.preprocessing.image.load_img(img_path, target_size=IMAGE_SIZE)
-        image = tf.keras.preprocessing.image.img_to_array(image) / 255.0  # Normalize to [0, 1]
+    for image_name, bbox_list in annotations.items():
+        image_path = os.path.join(IMAGE_FOLDER, image_name)
+        image = cv2.imread(image_path)
+        if image is None:
+            continue
+        image = cv2.resize(image, IMAGE_SIZE)
         images.append(image)
-        
-        # Load corresponding bounding box coordinates
-        base_name = os.path.splitext(os.path.basename(img_path))[0]
-        bbox_path = os.path.join(DATA_DIR, f"{base_name}.txt")
-        with open(bbox_path, 'r') as f:
-            bbox = f.read().strip().split(',')
-            bboxes.append([float(coord) for coord in bbox])  # Convert to float
+        for bbox in bbox_list:
+            x_min, y_min, x_max, y_max = bbox
+            bbox_scaled = [
+                x_min * IMAGE_SIZE[0] / image.shape[1],
+                y_min * IMAGE_SIZE[1] / image.shape[0],
+                x_max * IMAGE_SIZE[0] / image.shape[1],
+                y_max * IMAGE_SIZE[1] / image.shape[0]
+            ]
+            bboxes.append(bbox_scaled)
 
-    return np.array(images), np.array(bboxes)
+    images = np.array(images, dtype='float32') / 255.0
+    bboxes = np.array(bboxes, dtype='float32')
+    return images, bboxes
 
-# Build a simple model
-def build_model():
-    model = models.Sequential([
-        layers.Input(shape=(IMAGE_SIZE[0], IMAGE_SIZE[1], 3)),
-        layers.Conv2D(32, (3, 3), activation='relu'),
-        layers.MaxPooling2D(),
-        layers.Conv2D(64, (3, 3), activation='relu'),
-        layers.MaxPooling2D(),
-        layers.Flatten(),
-        layers.Dense(128, activation='relu'),
-        layers.Dense(4)  # Output layer for bounding box coordinates
+# Define a CNN model for bounding box prediction
+def create_model():
+    model = tf.keras.models.Sequential([
+        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(*IMAGE_SIZE, 3)),
+        tf.keras.layers.MaxPooling2D(2, 2),
+        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
+        tf.keras.layers.MaxPooling2D(2, 2),
+        tf.keras.layers.Flatten(),
+        tf.keras.layers.Dense(128, activation='relu'),
+        tf.keras.layers.Dense(4)
     ])
-    model.compile(optimizer='adam', loss='mean_squared_error')  # Using MSE for bounding box regression
+    model.compile(optimizer='adam', loss='mse')
     return model
 
 # Training function
 def train_model():
     images, bboxes = load_data()
-    model = build_model()
-    model.fit(images, bboxes, epochs=EPOCHS, batch_size=BATCH_SIZE)
+    model = create_model()
+    model.fit(images, bboxes, batch_size=BATCH_SIZE, epochs=EPOCHS, validation_split=0.1)
+    model.save(MODEL_SAVE_PATH)
+    print(f"Model saved at {MODEL_SAVE_PATH}")
 
-    # Save the trained model
-    model.save('object_detection_model.keras')
-    print("Model trained and saved as 'object_detection_model.keras'.")
+# Convert to TensorFlow Lite with quantization
+def convert_to_tflite():
+    model = tf.keras.models.load_model(MODEL_SAVE_PATH)
+    converter = tf.lite.TFLiteConverter.from_keras_model(model)
+    converter.optimizations = [tf.lite.Optimize.DEFAULT]
+    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
 
-# Main function to execute capturing and training
+    def representative_data_gen():
+        for _ in range(100):
+            yield [tf.random.uniform([1, *IMAGE_SIZE, 3], 0, 1, dtype=tf.float32)]
+
+    converter.representative_dataset = representative_data_gen
+    converter.inference_input_type = tf.uint8
+    converter.inference_output_type = tf.uint8
+    tflite_model = converter.convert()
+
+    with open("object_detection_model.tflite", "wb") as f:
+        f.write(tflite_model)
+    print("Model converted to object_detection_model.tflite")
+
+# Compile for Coral USB Accelerator
+def compile_for_edgetpu():
+    os.system("edgetpu_compiler object_detection_model.tflite")
+    print("Model compiled for Edge TPU as object_detection_model_edgetpu.tflite")
+
 if __name__ == "__main__":
-    capture_and_annotate()
     train_model()
+    convert_to_tflite()
+    compile_for_edgetpu()
