@@ -1,71 +1,53 @@
 import cv2
 import numpy as np
-import os
 import tensorflow as tf
-
-try:
-    from pycoral.adapters import common
-    from pycoral.utils.edgetpu import make_interpreter
-    CORAL_AVAILABLE = True
-except ImportError:
-    CORAL_AVAILABLE = False
+TF_ENABLE_ONEDNN_OPTS=0
 
 # Parameters
-MODEL_PATH_COMPUTER = 'object_detection_model.tflite'
-MODEL_PATH_CORAL = 'object_detection_model_edgetpu.tflite'
-IMAGE_SIZE = (128, 128)
+IMG_SIZE = (224, 224)  # Resize images to this size
+MODEL_PATH = 'object_detection_model.keras'  # Path to the saved model
 
-# Load the model
-def load_model():
-    if CORAL_AVAILABLE:
-        interpreter = make_interpreter(MODEL_PATH_CORAL)
-        interpreter.allocate_tensors()
-        print("Using Coral USB Accelerator.")
-    else:
-        interpreter = tf.lite.Interpreter(model_path=MODEL_PATH_COMPUTER)
-        interpreter.allocate_tensors()
-        print("Using standard TensorFlow Lite interpreter.")
-    return interpreter
+# Load the trained model
+model = tf.keras.models.load_model(MODEL_PATH)
 
-# Draw bounding box on the image
-def draw_bounding_box(image, bbox):
-    x_min, y_min, x_max, y_max = map(int, bbox)
-    cv2.rectangle(image, (x_min, y_min), (x_max, y_max), (255, 0, 0), 2)
+# Function to draw bounding box on the image
+def draw_bounding_box(image, box):
+    xmin, ymin, xmax, ymax = map(int, box)  # Convert to integer
+    cv2.rectangle(image, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)  # Draw rectangle in green
+    return image
 
-# Perform inference and display results
-def predict_and_display(interpreter, frame):
-    input_data = cv2.resize(frame, IMAGE_SIZE)
-    input_data = cv2.cvtColor(input_data, cv2.COLOR_BGR2RGB).astype(np.uint8)
-    interpreter.set_tensor(interpreter.get_input_details()[0]['index'], [input_data])
-    interpreter.invoke()
+# Start video capture from camera
+cap = cv2.VideoCapture(0)  # Use 0 for the default camera; adjust if necessary
 
-    bbox = interpreter.get_tensor(interpreter.get_output_details()[0]['index'])[0]
+if not cap.isOpened():
+    print("Error: Could not open video.")
+    exit()
 
-    height, width, _ = frame.shape
-    bbox[0] = int(bbox[0] * width / IMAGE_SIZE[0])
-    bbox[1] = int(bbox[1] * height / IMAGE_SIZE[1])
-    bbox[2] = int(bbox[2] * width / IMAGE_SIZE[0])
-    bbox[3] = int(bbox[3] * height / IMAGE_SIZE[1])
+while True:
+    ret, frame = cap.read()  # Capture frame-by-frame
 
-    draw_bounding_box(frame, bbox)
-    cv2.imshow("Real-Time Object Detection", frame)
+    if not ret:
+        print("Error: Could not read frame.")
+        break
 
-def test_model():
-    interpreter = load_model()
-    cap = cv2.VideoCapture(0)
+    # Prepare the image for prediction
+    input_image = cv2.resize(frame, IMG_SIZE)
+    input_image = np.expand_dims(input_image, axis=0) / 255.0  # Normalize and add batch dimension
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
+    # Predict bounding box
+    predictions = model.predict(input_image)
+    print(f"Predicted box: {predictions[0]}")  # Show the predictions in the console
 
-        predict_and_display(interpreter, frame)
+    # Draw the bounding box on the original frame
+    frame_with_box = draw_bounding_box(frame, predictions[0])
 
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+    # Show the image with bounding box
+    cv2.imshow('Real-Time Object Detection', frame_with_box)
 
-    cap.release()
-    cv2.destroyAllWindows()
+    # Break the loop on 'q' key press
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-if __name__ == "__main__":
-    test_model()
+# Release the video capture object and close all OpenCV windows
+cap.release()
+cv2.destroyAllWindows()

@@ -1,62 +1,22 @@
 # Variables
-MODEL_NAME=object_detection_model
-MODEL_DIR=$(MODEL_NAME)_saved_model
-MODEL_TFLITE=$(MODEL_NAME).tflite
-MODEL_EDGETPU=$(MODEL_NAME)_edgetpu.tflite
-RPI_USER=pi
-RPI_HOST=raspberrypi.local
-RPI_DIR=/home/$(RPI_USER)/model
+MODEL_DIR=object_detection_model_saved_model.keras
+TFLITE_MODEL=object_detection_model.tflite
+PI_IP=192.168.1.2  # Replace with your Pi's IP
+PI_USER=pi
+PI_PATH=/home/pi/object_detection
 
-# Python environment variables
-PYTHON=py
-
-# Paths
-ANNOTATION_SCRIPT=annotate.py
-TRAINING_SCRIPT=train.py
-TEST_SCRIPT=test.py
-
-# Commands
-.PHONY: all train convert compile transfer deploy clean
-
-# 1. Run the entire pipeline (train, convert, compile, transfer)
-all: train convert compile transfer
-
-# 2. Train the model and save as SavedModel format
+# Train model
 train:
-	@echo "Starting training..."
-	$(PYTHON) $(TRAINING_SCRIPT) --save_format saved_model --output_dir $(MODEL_DIR)
-	@echo "Training complete. Model saved in directory $(MODEL_DIR)"
+	py training_pipeline.py
 
-# 3. Convert the SavedModel to TFLite
-convert: $(MODEL_DIR)
-	@echo "Converting model to TensorFlow Lite..."
-	$(PYTHON) -c "import tensorflow as tf; \
-	converter = tf.lite.TFLiteConverter.from_saved_model('$(MODEL_DIR)'); \
-	converter.optimizations = [tf.lite.Optimize.DEFAULT]; \
-	tflite_model = converter.convert(); \
-	open('$(MODEL_TFLITE)', 'wb').write(tflite_model)"
-	@echo "Conversion complete. Model saved as $(MODEL_TFLITE)"
+# Convert model to TFLite
+convert:
+	py -m tensorflow.lite.TFLiteConverter --saved_model_dir $(MODEL_DIR) --output_file $(TFLITE_MODEL)
 
-# 4. Compile for Coral Edge TPU
-compile: $(MODEL_TFLITE)
-	@echo "Compiling for Edge TPU..."
-	edgetpu_compiler $(MODEL_TFLITE)
-	@echo "Compilation complete. Compiled model saved as $(MODEL_EDGETPU)"
-
-# 5. Transfer model and scripts to Raspberry Pi
+# Transfer to Raspberry Pi
 transfer:
-	@echo "Transferring files to Raspberry Pi..."
-	scp $(MODEL_EDGETPU) $(MODEL_TFLITE) $(TEST_SCRIPT) $(ANNOTATION_SCRIPT) \
-		$(RPI_USER)@$(RPI_HOST):$(RPI_DIR)
-	@echo "Transfer complete. Files moved to $(RPI_DIR) on Raspberry Pi."
+	scp $(TFLITE_MODEL) $(PI_USER)@$(PI_IP):$(PI_PATH)
 
-# 6. Run testing on Raspberry Pi (connects via SSH)
+# Run testing script
 deploy:
-	@echo "Starting real-time testing on Raspberry Pi..."
-	ssh $(RPI_USER)@$(RPI_HOST) 'cd $(RPI_DIR) && $(PYTHON) $(TEST_SCRIPT)'
-
-# 7. Clean up generated files
-clean:
-	@echo "Cleaning up generated files..."
-	rm -rf $(MODEL_DIR) $(MODEL_TFLITE) $(MODEL_EDGETPU)
-	@echo "Cleanup complete."
+	ssh $(PI_USER)@$(PI_IP) 'python3 $(PI_PATH)/real_time_test.py'

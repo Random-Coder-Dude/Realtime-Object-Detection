@@ -1,93 +1,92 @@
-import tensorflow as tf
 import numpy as np
 import cv2
 import os
-import json
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+
+# Disable oneDNN optimizations (optional)
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'
 
 # Parameters
-IMAGE_SIZE = (128, 128)
+IMG_SIZE = (224, 224)  # Resize images to this size
 BATCH_SIZE = 32
-EPOCHS = 10
-MODEL_SAVE_PATH = 'object_detection_model.tf'
-IMAGE_FOLDER = 'data/images'
-ANNOTATION_FILE = 'data/annotations.json'
+EPOCHS = 100
+DATA_DIR_IMAGES = 'data/images'  # Directory where images are stored
+DATA_DIR_LABELS = 'data/labels'  # Directory where labels are stored
 
-# Load data from annotations JSON
-def load_data():
-    with open(ANNOTATION_FILE, 'r') as file:
-        annotations = json.load(file)
-
+# Load images and bounding boxes from files
+def load_data(data_dir_images, data_dir_labels):
     images = []
     bboxes = []
-    for image_name, bbox_list in annotations.items():
-        image_path = os.path.join(IMAGE_FOLDER, image_name)
-        image = cv2.imread(image_path)
-        if image is None:
-            continue
-        image = cv2.resize(image, IMAGE_SIZE)
-        images.append(image)
-        for bbox in bbox_list:
-            x_min, y_min, x_max, y_max = bbox
-            bbox_scaled = [
-                x_min * IMAGE_SIZE[0] / image.shape[1],
-                y_min * IMAGE_SIZE[1] / image.shape[0],
-                x_max * IMAGE_SIZE[0] / image.shape[1],
-                y_max * IMAGE_SIZE[1] / image.shape[0]
-            ]
-            bboxes.append(bbox_scaled)
+    
+    for filename in os.listdir(data_dir_images):
+        if filename.endswith(".jpg"):  # Adjust if using other formats
+            img_path = os.path.join(data_dir_images, filename)
+            image = cv2.imread(img_path)
+            image = cv2.resize(image, IMG_SIZE)
+            images.append(image)
 
-    images = np.array(images, dtype='float32') / 255.0
-    bboxes = np.array(bboxes, dtype='float32')
+            # Load corresponding bounding box for each image
+            bbox_path = os.path.join(data_dir_labels, filename.replace('.jpg', '.txt'))
+            if os.path.exists(bbox_path):
+                with open(bbox_path, 'r') as f:
+                    bbox = list(map(float, f.read().strip().split()))  # [xmin, ymin, xmax, ymax]
+                    bboxes.append(bbox)
+            else:
+                bboxes.append([0, 0, 0, 0])  # Placeholder if no bbox found
+
+    images = np.array(images)
+    bboxes = np.array(bboxes)
+
+    # Debugging: Check shapes
+    print(f"Loaded {len(images)} images with shape {images.shape}")
+    print(f"Loaded {len(bboxes)} bounding boxes with shape {bboxes.shape}")
+
     return images, bboxes
 
-# Define a CNN model for bounding box prediction
-def create_model():
-    model = tf.keras.models.Sequential([
-        tf.keras.layers.Conv2D(32, (3, 3), activation='relu', input_shape=(*IMAGE_SIZE, 3)),
-        tf.keras.layers.MaxPooling2D(2, 2),
-        tf.keras.layers.Conv2D(64, (3, 3), activation='relu'),
-        tf.keras.layers.MaxPooling2D(2, 2),
-        tf.keras.layers.Flatten(),
-        tf.keras.layers.Dense(128, activation='relu'),
-        tf.keras.layers.Dense(4)
+# Build a simple CNN model
+def build_model():
+    model = Sequential([
+        Conv2D(32, (3, 3), activation='relu', input_shape=(IMG_SIZE[0], IMG_SIZE[1], 3)),
+        MaxPooling2D(pool_size=(2, 2)),
+        Conv2D(64, (3, 3), activation='relu'),
+        MaxPooling2D(pool_size=(2, 2)),
+        Flatten(),
+        Dense(128, activation='relu'),
+        Dropout(0.5),
+        Dense(4)  # Output layer for bounding box (xmin, ymin, xmax, ymax)
     ])
-    model.compile(optimizer='adam', loss='mse')
+    
+    model.compile(optimizer='adam', loss='mean_squared_error', metrics=['mae'])
     return model
 
-# Training function
+# Main function to train the model
 def train_model():
-    images, bboxes = load_data()
-    model = create_model()
-    model.fit(images, bboxes, batch_size=BATCH_SIZE, epochs=EPOCHS, validation_split=0.1)
-    model.save(MODEL_SAVE_PATH)
-    print(f"Model saved at {MODEL_SAVE_PATH}")
+    # Load data
+    images, bboxes = load_data(DATA_DIR_IMAGES, DATA_DIR_LABELS)
 
-# Convert to TensorFlow Lite with quantization
-def convert_to_tflite():
-    model = tf.keras.models.load_model(MODEL_SAVE_PATH)
-    converter = tf.lite.TFLiteConverter.from_keras_model(model)
-    converter.optimizations = [tf.lite.Optimize.DEFAULT]
-    converter.target_spec.supported_ops = [tf.lite.OpsSet.TFLITE_BUILTINS_INT8]
+    # Normalize images
+    images = images.astype('float32') / 255.0
 
-    def representative_data_gen():
-        for _ in range(100):
-            yield [tf.random.uniform([1, *IMAGE_SIZE, 3], 0, 1, dtype=tf.float32)]
+    # Set up training and validation data
+    train_size = int(0.8 * len(images))  # 80% for training
+    val_images = images[train_size:]
+    val_bboxes = bboxes[train_size:]
 
-    converter.representative_dataset = representative_data_gen
-    converter.inference_input_type = tf.uint8
-    converter.inference_output_type = tf.uint8
-    tflite_model = converter.convert()
+    # Debugging: Check validation shapes
+    print(f"Training with {train_size} images, validation with {len(val_images)} images")
 
-    with open("object_detection_model.tflite", "wb") as f:
-        f.write(tflite_model)
-    print("Model converted to object_detection_model.tflite")
+    # Build and train the model
+    model = build_model()
 
-# Compile for Coral USB Accelerator
-def compile_for_edgetpu():
-    os.system("edgetpu_compiler object_detection_model.tflite")
-    print("Model compiled for Edge TPU as object_detection_model_edgetpu.tflite")
+    # Fit the model without early stopping
+    model.fit(images[:train_size], bboxes[:train_size], 
+              epochs=EPOCHS, 
+              validation_data=(val_images, val_bboxes))
+
+    # Save the model in Keras format
+    model.save('object_detection_model.keras')
 
 if __name__ == "__main__":
     train_model()
-    convert_to_tflite()
-    compile_for_edgetpu()
