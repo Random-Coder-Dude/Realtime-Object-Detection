@@ -1,5 +1,4 @@
-# Custom dataset YAML for YOLO training
-
+# Copied from documentation
 # Paths to image directories
 train: data/images/train
 val: data/images/val

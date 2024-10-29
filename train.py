@@ -1,3 +1,5 @@
+#!Copied from documentation
+
 from ultralytics import YOLO
 
 # Load the model with your custom YAML configuration and optionally pretrained weights

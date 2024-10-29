@@ -1,17 +1,19 @@
-import cv2
-import os
-import yaml
-import random
-from shutil import copy2
+# Imports
+import cv2 # for drawing boxes over image + window creation
+import os # for filesystem managment
+import yaml # for parsing YAML files
+import random # just to split the validation and train images
+from shutil import copy2 # to copy files exactly to new locations
 
-# Load paths from custom YAML file
-yaml_path = "data.yaml"  # Path to your custom YAML file
+#load paths from data.yaml
+yaml_path = "data.yaml"
 
+#Parse YAML into variable data_config
 with open(yaml_path, "r") as file:
     data_config = yaml.safe_load(file)
 
 # Directories from the YAML file
-images_dir = "data/images"  # Root directory for images
+images_dir = "data/images"
 train_images_dir = data_config["train"]
 val_images_dir = data_config["val"]
 train_labels_dir = data_config["labels"]["train"]
@@ -23,11 +25,12 @@ os.makedirs(val_images_dir, exist_ok=True)
 os.makedirs(train_labels_dir, exist_ok=True)
 os.makedirs(val_labels_dir, exist_ok=True)
 
-# Variables to store bounding box coordinates and class ID
-bbox = []
-class_id = 0  # As specified in YAML, only 1 class (class_id = 0)
+# Global Variables
+bbox = [] # Bounding Box array
+class_id = 0  # Only 1 id, so doesn't really matter (Can be expanded)
 
-def draw_bbox(event, x, y, flags, param):
+# Using cv2 mouse commands and screen variables save the bounding box to the array
+def draw_bbox(event, x, y):
     global bbox, class_id
 
     # Left mouse button press: start drawing
@@ -47,7 +50,7 @@ def draw_bbox(event, x, y, flags, param):
         x1, y1 = bbox[0]
         x2, y2 = bbox[1]
         
-        # Get normalized YOLO format coordinates
+        # Math I did using ChatGPT to convert into YOLO text format
         x_center = ((x1 + x2) / 2) / img.shape[1]
         y_center = ((y1 + y2) / 2) / img.shape[0]
         width = abs(x2 - x1) / img.shape[1]
@@ -87,7 +90,7 @@ for img_name in all_images:
     # Load image
     img_path = os.path.join(images_dir, img_name)
     img = cv2.imread(img_path)
-    img_name_no_ext = os.path.splitext(img_name)[0]  # Remove file extension
+    img_name_no_ext = os.path.splitext(img_name)[0]  #IDK chatGPT told me its necessary
 
     # Determine if image is for training or validation and move accordingly
     if img_name in train_images:
@@ -98,16 +101,29 @@ for img_name in all_images:
     copy2(img_path, dest_dir)
 
     # Set up window and callback
-    cv2.namedWindow("Image")
-    cv2.setMouseCallback("Image", draw_bbox)
+    cv2.namedWindow("Annotate")
+    cv2.setMouseCallback("Annotate", draw_bbox)
 
-    print(f"Draw bounding boxes for {img_name}. Press 'q' to move to the next image.")
+    print(f"Draw bounding boxes for {img_name}. Press 'q' to move to the next image.") #! Debug (Print)
     
+    #Move to next image when Q is pressed
     while True:
         cv2.imshow("Image", img)
         if cv2.waitKey(1) & 0xFF == ord("q"):
             break
 
+    # Delete the original images after processing
+    img_path = os.path.join(images_dir, img_name)
+    if os.path.exists(img_path):
+        os.remove(img_path)
+        print(f"Deleted original image: {img_name}")
+    else:
+        print(f"File not found, could not delete: {img_name}")
+
+    print("All original images have been deleted.")
+
+
+    #boilerplate to ensure everything closes and code execution stops
     cv2.destroyAllWindows()
 
-print("Annotation and split process completed.")
+print("Annotation and split process completed.") #! Debug (Print)
